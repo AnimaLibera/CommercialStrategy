@@ -1,0 +1,130 @@
+// License: Read only Policy
+// Date: 12.06.2021
+// © AnimaLibera
+
+//@version=4
+strategy("Commercial Strategy", overlay=true)
+
+//Commercial Signal -------------------------------------------------------------------------------------
+
+//Eingabe
+ticker = syminfo.ticker
+product =
+	  ticker == "CL1!" ? "CL" : 
+	  ticker == "PL1!" ? "PL" :
+	  ticker == "NG1!" ? "NG" :
+	  ticker == "CT1!" ? "CT" :
+	  ticker == "BR1!" ? "BR" :
+	  ticker == "PA1!" ? "075651" :
+	  ticker == "SI1!" ? "SI" :
+	  ticker == "HG1!" ? "HG" :
+	  ticker == "HO1!" ? "HO" :
+	  ticker == "ZW1!" ? "W"  :
+	  ticker == "RB1!" ? "RB" :
+	  ticker == "CC1!" ? "CC" :
+	  ticker == "KC1!" ? "KC" :
+	  ticker == "SB1!" ? "SB" :
+	  ticker == "GC1!" ? "GC" :
+	  ticker == "ZC1!" ? "C"  :
+	  ticker == "GF1!" ? "061641" :
+	  ticker == "ZS1!" ? "S"  :
+	  ticker == "LE1!" ? "057642" :
+	  ticker == "HE1!" ? "054642" :
+	  ""
+
+
+exchange = input("", title="Exchange", confirm=true)
+options = input(false, type=input.bool, title="Options")
+instrument = input(true, type=input.bool, title="Commodity Futures")
+//Check if to generate Quandl Code for Commodity Future or Financial Future: 
+code = instrument ? (product + (options ? "_FO_L_ALL" : "_F_L_ALL")) : ("TIFF_" + exchange + "_" + product + "_ALL")
+
+long_com = security("QUANDL:CFTC/"+code+"|4", "W", close)
+short_com = security("QUANDL:CFTC/"+code+"|5", "W", close)
+
+//Verabeitung
+net_com = long_com - short_com
+
+high_com = highest (net_com, (timeframe.period == 'W') ? 52*3 : (timeframe.period == 'D') ? 365*3 : 0) //Highest High 3 Jahre mit Abfrage der Timeframe des Charts
+low_com = lowest(net_com,  (timeframe.period == 'W') ? 52*3 : (timeframe.period == 'D') ? 365*3 : 0) //Lowest Low 3 Jahre mit Abfrage der Timeframe des Charts
+
+spanne = high_com - low_com
+stufe = net_com - low_com
+index = 100 / spanne * stufe
+
+//Commercial Signal ermitteln
+// -> Wenn der Index zwischen 75 und 25 ist Signal fortschreiben
+// -> Wenn der Index größer gleich 75 Kauf-Signal (100)
+// -> Wenn der Index kleiner gleich 25 ist Verkaufs-Signal (0)
+// -> Wenn keines Zutrifft zb. na dann Neutrales-Signal (50)
+int commericalSignalRule1 = na
+commericalSignalRule1 := (index < 75 and index > 25) ? 50 : (index >= 75) ? 100 : (index <= 25) ? 0 : 50
+
+//Commercial Signal Rule2 ermitteln
+lockBackBars = (timeframe.period == 'W') ? 52 : (timeframe.period == 'D') ? 365 : 0
+highestIndex = highest(index, lockBackBars)
+lowestIndex = lowest(index, lockBackBars)
+commercialSignalRule2 = highestIndex == index ? 100 : lowestIndex == index ? 0 : 50
+
+commercialSignalCombined = (commericalSignalRule1 == 100 or commercialSignalRule2 == 100) ? 100 : (commericalSignalRule1 == 0 or commercialSignalRule2 == 0) ? 0 : 50
+
+//Commercial Signal Finale ermitteln
+//Signal wird n Monate fortgeschrieben
+fillForwardMonth = input(title="Fill Forward Month", type=input.integer, defval = 1)
+fillForwardBars = (timeframe.period == 'W') ? fillForwardMonth * 4 : (timeframe.period == 'D') ? fillForwardMonth * 20 : 0
+int returnValue = na
+bool new = true
+commercialSignalFinale = for counter = 0 to fillForwardBars
+    if (commercialSignalCombined[counter] == 50 and new)
+        returnValue := 50
+        new := true
+    if(commercialSignalCombined[counter] == 100 and new)
+        returnValue := 100
+        new := false
+    if (commercialSignalCombined[counter] == 0 and new)
+        returnValue := 0
+        new := false
+    returnValue
+
+//Simple Moving Average 10 Weeks ---------------------------------------------------------------------
+SMA = sma(close, length = (timeframe.period == 'W') ? 10 : (timeframe.period == 'D') ? 50 : 0)
+NewUptrend = SMA > SMA[1] and SMA[1] <= SMA[2]
+NewDowntrend = SMA < SMA[1] and SMA[1] >= SMA[2]
+Uptrend = SMA > SMA[1]
+Downtrend = SMA < SMA[1]
+boolNewTrend = input(title="NewTrend", type=input.bool, defval=true)
+UptrendSignal = boolNewTrend ? NewUptrend : Uptrend
+DowntrendSignal = boolNewTrend ? NewDowntrend : Downtrend
+
+//Tradinglogic ---------------------------------------------------------------------------------------
+var bool Long = false
+var bool Short = false
+var TradeLong = input(title="TradeLong", type=input.bool, defval=true)
+var TradeShort = input(title="TradeShort", type=input.bool, defval=true)
+var StartYear = input(title="Start Year", type=input.integer, defval=2000)
+var EndYear = input(title="End Year", type=input.integer, defval=2020)
+if (year >= StartYear and year <= EndYear)
+    if(TradeLong == true and Long == false and commercialSignalFinale == 100 and UptrendSignal) //Entry-Long-Rule
+        Long := true
+        strategy.entry("Long", strategy.long, 1)
+    if(Long == true and NewDowntrend) //Exit-Long-Rule
+        Long := false
+        strategy.close("Long")
+        
+    if(TradeShort == true and Short == false and commercialSignalFinale == 0 and DowntrendSignal) //Entry-Short-Rule
+        Short := true
+        strategy.entry("Short", strategy.short, 1)
+    if(Short == true and NewUptrend) //Exit-Short-Rule
+        Short := false
+        strategy.close("Short")
+
+if(year > EndYear) //Close after Tradingviewdow
+    strategy.close("Long")
+    strategy.close("Short")
+
+//Ausgabe
+plot(SMA, color=color.red)
+//plot(index, color=color.blue, linewidth=2)
+//plot(commericalSignal, color=color.black, linewidth=2)
+//hline(75, color=color.green, linestyle=hline.style_dashed)
+//hline(25, color=color.red, linestyle=hline.style_dashed)
